@@ -1,0 +1,128 @@
+- name: Harden Raspberry Pi and install tools
+  hosts: pis
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Update and upgrade all packages
+      apt:
+        update_cache: yes
+        upgrade: safe
+
+    - name: Install necessary packages
+      apt:
+        name:
+          - fail2ban
+          - ufw
+        state: present
+
+    - name: Enable and configure UFW
+      ufw:
+        rule: allow
+        name: OpenSSH
+        state: enabled
+
+    - name: Enable and configure UFW for Kismet (port 2501)
+      ufw:
+        rule: allow
+        port: '2501'
+        proto: tcp
+        state: enabled
+
+    - name: Enable and configure UFW for Kismet (port 3501)
+      ufw:
+        rule: allow
+        port: '3501'
+        proto: tcp
+        state: enabled 
+
+    - name: Install dependencies for kismet, nmap, and aircrack-ng
+      apt:
+        name:
+          - build-essential
+          - libssl-dev
+          - libncurses5-dev
+          - libpcap-dev
+          - libsqlite3-dev
+          - libpcre3-dev
+          - libnl-3-dev
+          - libnl-genl-3-dev
+          - libnl-route-3-dev
+          - ethtool
+          - curl
+          - wget
+          - gnupg2
+          - gpsd
+          - gpsd-clients
+          - sqlite3
+          - git
+          - python3-pip
+        state: present
+
+    - name: Import Kismet GPG key
+      ansible.builtin.shell: >
+        wget -O - https://www.kismetwireless.net/repos/kismet-release.gpg.key | gpg --dearmor | sudo tee /usr/share/keyrings/kismet-archive-keyring.gpg
+
+    - name: Add Kismet repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/kismet-archive-keyring.gpg] https://www.kismetwireless.net/repos/apt/release/bullseye bullseye main"
+        state: present
+
+    - name: Update apt cache and install Kismet
+      ansible.builtin.apt:
+        name: kismet
+        update_cache: yes
+        state: present 
+
+    - name: Uncomment and change httpd_bind_address
+      lineinfile:
+        path: /etc/kismet/kismet_httpd.conf
+        regexp: '^\s*#\s*httpd_bind_address=.*'
+        line: 'httpd_bind_address=0.0.0.0'
+        backrefs: yes
+
+    - name: Uncomment gpsd line
+      lineinfile:
+        path: /etc/kismet/kismet.conf
+        regexp: '^\s*#gps=gpsd:host=localhost,port=2947'
+        line: 'gps=gpsd:host=localhost,port=2947'
+
+    - name: Add pcapppi and pcapng to log_types
+      lineinfile:
+        path: /etc/kismet/kismet_logging.conf
+        regexp: '^(log_types=kismet)'
+        line: '\1,pcapppi,pcapng'
+        backrefs: yes
+
+    - name: Install nmap, aircrack-ng, and tcpdump
+      apt:
+        name:
+          - nmap
+          - aircrack-ng
+          - tcpdump
+        state: present
+
+    - name: Set gpsd configurations
+      ansible.builtin.lineinfile:
+        path: /etc/default/gpsd
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^START_DAEMON="false"', line: 'START_DAEMON="true"' }
+        - { regexp: '^DEVICES=""', line: 'DEVICES="/dev/ttyUSB1"' }
+        - { regexp: '^GPSD_OPTIONS=""', line: 'GPSD_OPTIONS="-b -s 115200"' }      
+
+    - name: Copy enable_gps.service to remote host
+      copy:
+        src: /home/kali/ansible/rad-setup/enable_gps.service
+        dest: /etc/systemd/system/enable_gps.service
+
+    - name: Copy gps_enable.py to remote host
+      copy:
+        src: /home/kali/ansible/rad-setup/enable_gps.py
+        dest: /sbin/enable_gps
+        mode: "0755"      
+
+    - name: Enable Gps 
+      ansible.builtin.shell: >
+        sudo systemctl enable enable_gps.service && sudo systemctl start enable_gps.service && sudo systemctl enable gpsd && sudo systemctl start gpsd
